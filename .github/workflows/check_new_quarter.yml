@@ -1,0 +1,65 @@
+name: Check and deploy new quarter
+
+on:
+    schedule:
+        - cron: '0 * * * *'
+    workflow_dispatch:
+
+env:
+    ANTEATER_API_KEY: ${{ secrets.ANTEATER_API_KEY }}
+
+permissions:
+    contents: write
+
+jobs:
+    check-quarters:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+            - name: Validate API key
+              run: |
+                  if [ -z "$ANTEATER_API_KEY" ]; then
+                      echo "ANTEATER_API_KEY secret is not set"
+                      exit 1
+                  fi
+
+            - name: Setup Node and pnpm
+              uses: actions/setup-node@v4
+              with:
+                node-version: '22'
+              
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                version: 10.23.0
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Run Update Script
+              run: pnpm update-terms
+
+            - name: Check for changes
+              id: git-check
+              run: |
+                  if git diff --exit-code src/generated/deployed_terms.json; then
+                      echo "changes=false" >> $GITHUB_OUTPUT
+                  else
+                      echo "changes=true" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Commit and push updated terms
+              if: steps.git-check.outputs.changes == 'true'
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+                  git add src/generated/deployed_terms.json
+
+                  git commit -m "ci: detected new quarter or course count update" \
+                             -m "Auto-updated by workflow on $(date -u +%Y-%m-%d)"
+
+                  git pull --rebase origin ${{ github.ref_name }}
+                  git push
+                  echo "Updated deployed_terms.json and triggered rebuild"
